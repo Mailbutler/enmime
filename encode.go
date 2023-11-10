@@ -288,7 +288,18 @@ func selectTransferEncoding(content []byte, quoteLineBreaks bool) transferEncodi
 	// Binary chars remaining before we choose b64 encoding.
 	threshold := b64Percent * len(content) / 100
 	bincount := 0
+	maxLineLen := 0
+	lineLen := 0
 	for _, b := range content {
+		if b == '\n' || b == '\r' {
+			if maxLineLen < lineLen {
+				maxLineLen = lineLen
+			}
+			lineLen = 0
+		} else {
+			lineLen += 1
+		}
+
 		if (b < ' ' || '~' < b) && b != '\t' {
 			if !quoteLineBreaks && (b == '\r' || b == '\n') {
 				continue
@@ -299,7 +310,12 @@ func selectTransferEncoding(content []byte, quoteLineBreaks bool) transferEncodi
 			}
 		}
 	}
-	if bincount == 0 {
+
+	if maxLineLen < lineLen {
+		maxLineLen = lineLen
+	}
+
+	if bincount == 0 && maxLineLen <= 78 {
 		return te7Bit
 	}
 	return teQuoted
