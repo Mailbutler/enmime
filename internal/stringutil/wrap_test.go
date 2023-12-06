@@ -7,7 +7,7 @@ import (
 )
 
 func TestWrapEmpty(t *testing.T) {
-	b := stringutil.Wrap(80, "")
+	b := stringutil.Wrap(80, ' ', false, "")
 	got := string(b)
 
 	if got != "" {
@@ -17,7 +17,7 @@ func TestWrapEmpty(t *testing.T) {
 
 func TestWrapIdentityShort(t *testing.T) {
 	want := "short string"
-	b := stringutil.Wrap(15, want)
+	b := stringutil.Wrap(15, ' ', false, want)
 	got := string(b)
 
 	if got != want {
@@ -27,7 +27,7 @@ func TestWrapIdentityShort(t *testing.T) {
 
 func TestWrapIdentityLong(t *testing.T) {
 	want := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	b := stringutil.Wrap(5, want)
+	b := stringutil.Wrap(5, ' ', false, want)
 	got := string(b)
 
 	if got != want {
@@ -70,7 +70,7 @@ func TestWrap(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.input, func(t *testing.T) {
-			b := stringutil.Wrap(6, tc.input)
+			b := stringutil.Wrap(6, ' ', false, tc.input)
 			got := string(b)
 			if got != tc.want {
 				t.Errorf("got: %q, want: %q", got, tc.want)
