@@ -2,6 +2,7 @@ package enmime
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/base64"
 	"io"
 	"mime"
@@ -40,7 +41,7 @@ var nlnl = []byte{'\n', '\n'}
 
 // Encode writes this Part and all its children to the specified writer in MIME format
 // using the specified content transfer encoding.
-func (p *Part) EncodeCustom(writer io.Writer, textCte TransferEncoding, tabWrapHeaders bool, separateBodyWithLF bool) error {
+func (p *Part) EncodeCustom(writer io.Writer, textCte TransferEncoding, tabWrapHeaders bool, useLF bool) error {
 
 	if p.Header == nil {
 		p.Header = make(textproto.MIMEHeader)
@@ -58,25 +59,23 @@ func (p *Part) EncodeCustom(writer io.Writer, textCte TransferEncoding, tabWrapH
 
 	// Encode this part.
 	b := bufio.NewWriter(writer)
-	if err := p.encodeHeader(b, tabWrapHeaders, separateBodyWithLF, separateBodyWithLF); err != nil {
+	if err := p.encodeHeader(b, tabWrapHeaders, useLF, useLF); err != nil {
 		return err
 	}
 
+	if useLF {
+		if _, err := b.Write(nlnl); err != nil {
+			return err
+		}
+	}
+
 	if len(p.Content) > 0 {
-		if separateBodyWithLF && len(p.Header) > 0 {
-			if _, err := b.Write(nlnl); err != nil {
-				return err
-			}
-		} else {
+		if !useLF {
 			if _, err := b.Write(crnl); err != nil {
 				return err
 			}
 		}
-		if err := p.encodeContent(b, cte); err != nil {
-			return err
-		}
-	} else if separateBodyWithLF && p.FirstChild != nil && len(p.Header) > 0 {
-		if _, err := b.Write(nlnl); err != nil {
+		if err := p.encodeContent(b, cte, useLF); err != nil {
 			return err
 		}
 	}
@@ -85,17 +84,30 @@ func (p *Part) EncodeCustom(writer io.Writer, textCte TransferEncoding, tabWrapH
 		return b.Flush()
 	}
 	// Encode children.
-	endMarker := []byte("\r\n--" + p.Boundary + "--")
-	marker := endMarker[:len(endMarker)-2]
+	var marker, endMarker []byte
+
+	if useLF {
+		marker = []byte("\n--" + p.Boundary)
+		endMarker = []byte("\n--" + p.Boundary + "--")
+	} else {
+		endMarker = []byte("\r\n--" + p.Boundary + "--")
+		marker = endMarker[:len(endMarker)-2]
+	}
 	c := p.FirstChild
 	for c != nil {
 		if _, err := b.Write(marker); err != nil {
 			return err
 		}
-		if _, err := b.Write(crnl); err != nil {
-			return err
+		if useLF {
+			if _, err := b.Write([]byte{'\n'}); err != nil {
+				return err
+			}
+		} else {
+			if _, err := b.Write(crnl); err != nil {
+				return err
+			}
 		}
-		if err := c.EncodeCustom(b, textCte, tabWrapHeaders, false); err != nil {
+		if err := c.EncodeCustom(b, textCte, tabWrapHeaders, useLF); err != nil {
 			return err
 		}
 		c = c.NextSibling
@@ -103,8 +115,14 @@ func (p *Part) EncodeCustom(writer io.Writer, textCte TransferEncoding, tabWrapH
 	if _, err := b.Write(endMarker); err != nil {
 		return err
 	}
-	if _, err := b.Write(crnl); err != nil {
-		return err
+	if useLF {
+		if _, err := b.Write([]byte{'\n'}); err != nil {
+			return err
+		}
+	} else {
+		if _, err := b.Write(crnl); err != nil {
+			return err
+		}
 	}
 	return b.Flush()
 }
@@ -243,9 +261,9 @@ func (p *Part) encodeHeader(b *bufio.Writer, tabWrap bool, wrapWithLFOnly bool, 
 }
 
 // encodeContent writes out the content in the selected encoding.
-func (p *Part) encodeContent(b *bufio.Writer, cte TransferEncoding) (err error) {
+func (p *Part) encodeContent(b *bufio.Writer, cte TransferEncoding, useLF bool) (err error) {
 	if p.ContentReader != nil {
-		return p.encodeContentFromReader(b)
+		return p.encodeContentFromReader(b, useLF)
 	}
 
 	if p.parser != nil && p.parser.rawContent {
@@ -266,17 +284,39 @@ func (p *Part) encodeContent(b *bufio.Writer, cte TransferEncoding) (err error) 
 			if _, err = b.Write(text[:lineLen]); err != nil {
 				return err
 			}
-			if _, err := b.Write(crnl); err != nil {
-				return err
+			if useLF {
+				if _, err := b.Write([]byte{'\n'}); err != nil {
+					return err
+				}
+			} else {
+				if _, err := b.Write(crnl); err != nil {
+					return err
+				}
 			}
 			text = text[lineLen:]
 		}
 	case TeQuoted:
-		qp := quotedprintable.NewWriter(b)
-		if _, err = qp.Write(p.Content); err != nil {
-			return err
+		if useLF {
+			lfbuf := &bytes.Buffer{}
+			qp := quotedprintable.NewWriter(lfbuf)
+			if _, err = qp.Write(p.Content); err != nil {
+				return err
+			}
+			err = qp.Close()
+			if err != nil {
+				return err
+			}
+			lfbytes := bytes.ReplaceAll(lfbuf.Bytes(), []byte("\r\n"), []byte("\n"))
+			if _, err = b.Write(lfbytes); err != nil {
+				return err
+			}
+		} else {
+			qp := quotedprintable.NewWriter(b)
+			if _, err = qp.Write(p.Content); err != nil {
+				return err
+			}
+			err = qp.Close()
 		}
-		err = qp.Close()
 	default:
 		_, err = b.Write(p.Content)
 	}
@@ -284,7 +324,7 @@ func (p *Part) encodeContent(b *bufio.Writer, cte TransferEncoding) (err error) 
 }
 
 // encodeContentFromReader writes out the content read from the reader using base64 encoding.
-func (p *Part) encodeContentFromReader(b *bufio.Writer) error {
+func (p *Part) encodeContentFromReader(b *bufio.Writer, useLF bool) error {
 	text := make([]byte, base64EncodedLineLen) // a single base64 encoded line
 	enc := base64.StdEncoding
 
@@ -316,8 +356,14 @@ func (p *Part) encodeContentFromReader(b *bufio.Writer) error {
 			if _, err := b.Write(text[:enc.EncodedLen(size)]); err != nil {
 				return err
 			}
-			if _, err := b.Write(crnl); err != nil {
-				return err
+			if useLF {
+				if _, err := b.Write([]byte{'\n'}); err != nil {
+					return err
+				}
+			} else {
+				if _, err := b.Write(crnl); err != nil {
+					return err
+				}
 			}
 		}
 
