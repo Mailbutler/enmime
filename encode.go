@@ -36,10 +36,12 @@ const (
 )
 
 var crnl = []byte{'\r', '\n'}
+var nlnl = []byte{'\n', '\n'}
 
 // Encode writes this Part and all its children to the specified writer in MIME format
 // using the specified content transfer encoding.
-func (p *Part) EncodeUsingTextCte(writer io.Writer, textCte TransferEncoding) error {
+func (p *Part) EncodeCustom(writer io.Writer, textCte TransferEncoding, tabWrapHeaders bool, separateBodyWithLF bool) error {
+
 	if p.Header == nil {
 		p.Header = make(textproto.MIMEHeader)
 	}
@@ -56,17 +58,29 @@ func (p *Part) EncodeUsingTextCte(writer io.Writer, textCte TransferEncoding) er
 
 	// Encode this part.
 	b := bufio.NewWriter(writer)
-	if err := p.encodeHeader(b); err != nil {
+	if err := p.encodeHeader(b, tabWrapHeaders, separateBodyWithLF, separateBodyWithLF); err != nil {
 		return err
 	}
+
 	if len(p.Content) > 0 {
-		if _, err := b.Write(crnl); err != nil {
-			return err
+		if separateBodyWithLF && len(p.Header) > 0 {
+			if _, err := b.Write(nlnl); err != nil {
+				return err
+			}
+		} else {
+			if _, err := b.Write(crnl); err != nil {
+				return err
+			}
 		}
 		if err := p.encodeContent(b, cte); err != nil {
 			return err
 		}
+	} else if separateBodyWithLF && p.FirstChild != nil && len(p.Header) > 0 {
+		if _, err := b.Write(nlnl); err != nil {
+			return err
+		}
 	}
+
 	if p.FirstChild == nil {
 		return b.Flush()
 	}
@@ -81,7 +95,7 @@ func (p *Part) EncodeUsingTextCte(writer io.Writer, textCte TransferEncoding) er
 		if _, err := b.Write(crnl); err != nil {
 			return err
 		}
-		if err := c.EncodeUsingTextCte(b, textCte); err != nil {
+		if err := c.EncodeCustom(b, textCte, tabWrapHeaders, false); err != nil {
 			return err
 		}
 		c = c.NextSibling
@@ -95,9 +109,15 @@ func (p *Part) EncodeUsingTextCte(writer io.Writer, textCte TransferEncoding) er
 	return b.Flush()
 }
 
+// Encode writes this Part and all its children to the specified writer in MIME format
+// and using the specified content transfer encoding.
+func (p *Part) EncodeUsingCte(writer io.Writer, cte TransferEncoding) error {
+	return p.EncodeCustom(writer, cte, true, true)
+}
+
 // Encode writes this Part and all its children to the specified writer in MIME format.
 func (p *Part) Encode(writer io.Writer) error {
-	return p.EncodeUsingTextCte(writer, TeAuto)
+	return p.EncodeCustom(writer, TeAuto, true, true)
 }
 
 // setupMIMEHeaders determines content transfer encoding, generates a boundary string if required,
@@ -178,14 +198,22 @@ func (p *Part) setupMIMEHeaders(textCteHint TransferEncoding) TransferEncoding {
 }
 
 // encodeHeader writes out a sorted list of headers.
-func (p *Part) encodeHeader(b *bufio.Writer) error {
+func (p *Part) encodeHeader(b *bufio.Writer, tabWrap bool, wrapWithLFOnly bool, omitLastNewline bool) error {
 	keys := make([]string, 0, len(p.Header))
 	for k := range p.Header {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	for _, k := range keys {
-		for _, v := range p.Header[k] {
+
+	var wrapChar byte
+	if tabWrap {
+		wrapChar = '\t'
+	} else {
+		wrapChar = ' '
+	}
+
+	for i, k := range keys {
+		for j, v := range p.Header[k] {
 			encv := v
 			switch selectTransferEncoding([]byte(v), true) {
 			case TeBase64:
@@ -193,8 +221,18 @@ func (p *Part) encodeHeader(b *bufio.Writer) error {
 			case TeQuoted:
 				encv = mime.QEncoding.Encode(utf8, v)
 			}
+
+			var nl string
+			if omitLastNewline && i == len(keys)-1 && j == len(p.Header[k])-1 {
+				nl = ""
+			} else if wrapWithLFOnly {
+				nl = "\n"
+			} else {
+				nl = "\r\n"
+			}
+
 			// _ used to prevent early wrapping
-			wb := stringutil.Wrap(76, k, ":_", encv, "\r\n")
+			wb := stringutil.Wrap(76, wrapChar, wrapWithLFOnly, k, ":_", encv, nl)
 			wb[len(k)+1] = ' '
 			if _, err := b.Write(wb); err != nil {
 				return err
