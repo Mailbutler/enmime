@@ -41,7 +41,7 @@ var nlnl = []byte{'\n', '\n'}
 
 // Encode writes this Part and all its children to the specified writer in MIME format
 // using the specified content transfer encoding.
-func (p *Part) EncodeCustom(writer io.Writer, textCte TransferEncoding, tabWrapHeaders bool, useLF bool) error {
+func (p *Part) EncodeCustom(writer io.Writer, textCte TransferEncoding, useLF bool) error {
 
 	if p.Header == nil {
 		p.Header = make(textproto.MIMEHeader)
@@ -59,7 +59,7 @@ func (p *Part) EncodeCustom(writer io.Writer, textCte TransferEncoding, tabWrapH
 
 	// Encode this part.
 	b := bufio.NewWriter(writer)
-	if err := p.encodeHeader(b, tabWrapHeaders, useLF, useLF); err != nil {
+	if err := p.encodeHeader(b, useLF, useLF); err != nil {
 		return err
 	}
 
@@ -107,7 +107,7 @@ func (p *Part) EncodeCustom(writer io.Writer, textCte TransferEncoding, tabWrapH
 				return err
 			}
 		}
-		if err := c.EncodeCustom(b, textCte, tabWrapHeaders, useLF); err != nil {
+		if err := c.EncodeCustom(b, textCte, useLF); err != nil {
 			return err
 		}
 		c = c.NextSibling
@@ -130,12 +130,12 @@ func (p *Part) EncodeCustom(writer io.Writer, textCte TransferEncoding, tabWrapH
 // Encode writes this Part and all its children to the specified writer in MIME format
 // and using the specified content transfer encoding.
 func (p *Part) EncodeUsingCte(writer io.Writer, cte TransferEncoding) error {
-	return p.EncodeCustom(writer, cte, true, true)
+	return p.EncodeCustom(writer, cte, true)
 }
 
 // Encode writes this Part and all its children to the specified writer in MIME format.
 func (p *Part) Encode(writer io.Writer) error {
-	return p.EncodeCustom(writer, TeAuto, true, true)
+	return p.EncodeCustom(writer, TeAuto, true)
 }
 
 // setupMIMEHeaders determines content transfer encoding, generates a boundary string if required,
@@ -216,19 +216,12 @@ func (p *Part) setupMIMEHeaders(textCteHint TransferEncoding) TransferEncoding {
 }
 
 // encodeHeader writes out a sorted list of headers.
-func (p *Part) encodeHeader(b *bufio.Writer, tabWrap bool, wrapWithLFOnly bool, omitLastNewline bool) error {
+func (p *Part) encodeHeader(b *bufio.Writer, wrapWithLFOnly bool, omitLastNewline bool) error {
 	keys := make([]string, 0, len(p.Header))
 	for k := range p.Header {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-
-	var wrapChar byte
-	if tabWrap {
-		wrapChar = '\t'
-	} else {
-		wrapChar = ' '
-	}
 
 	for i, k := range keys {
 		for j, v := range p.Header[k] {
@@ -250,7 +243,7 @@ func (p *Part) encodeHeader(b *bufio.Writer, tabWrap bool, wrapWithLFOnly bool, 
 			}
 
 			// _ used to prevent early wrapping
-			wb := stringutil.Wrap(76, wrapChar, wrapWithLFOnly, k, ":_", encv, nl)
+			wb := stringutil.Wrap(76, ' ', wrapWithLFOnly, k, ":_", encv, nl)
 			wb[len(k)+1] = ' '
 			if _, err := b.Write(wb); err != nil {
 				return err
